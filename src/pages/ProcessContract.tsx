@@ -7,7 +7,7 @@ import { ArrowLeft, Download, Eye, AlertTriangle } from "lucide-react";
 import { DocumentViewer } from "@/components/DocumentViewer";
 import { FieldExtractor } from "@/components/FieldExtractor";
 import { toast } from "@/hooks/use-toast";
-import Tesseract from 'tesseract.js';
+import { processPDFWithOCR, PDFProcessingProgress } from "@/utils/pdfProcessor";
 
 interface ProcessState {
   file: File;
@@ -30,8 +30,12 @@ const ProcessContract = () => {
   const [extractedData, setExtractedData] = useState<ExtractedField[]>([]);
   const [isProcessing, setIsProcessing] = useState(true);
   const [documentNotes, setDocumentNotes] = useState("");
-  const [currentStep, setCurrentStep] = useState<"ocr" | "extraction" | "review">("ocr");
-  const [ocrProgress, setOcrProgress] = useState(0);
+  const [currentStep, setCurrentStep] = useState<"loading" | "converting" | "ocr" | "extraction" | "review">("loading");
+  const [processingProgress, setProcessingProgress] = useState<{
+    pageNumber?: number;
+    totalPages?: number;
+    ocrProgress?: number;
+  }>({});
 
   useEffect(() => {
     if (!state?.file) {
@@ -177,65 +181,24 @@ const ProcessContract = () => {
         throw new Error(`Unsupported file type: ${state.file.type}. Please upload a PDF file.`);
       }
 
-      setCurrentStep("ocr");
       toast({
-        title: "Starting OCR processing...",
-        description: "Converting PDF to text",
+        title: "Starting PDF processing...",
+        description: "Converting PDF pages to images for OCR",
       });
 
-      console.log("Initializing Tesseract OCR...");
-
-      // For PDF files, we need to use a different approach
-      // Since Tesseract works best with images, let's create a fallback for PDFs
-      let ocrResult;
-      
-      try {
-        // Try to process the PDF directly with Tesseract
-        ocrResult = await Tesseract.recognize(state.file, 'eng', {
-          logger: m => {
-            console.log("Tesseract progress:", m);
-            if (m.status === 'recognizing text') {
-              setOcrProgress(Math.round(m.progress * 100));
-            }
-          }
+      // Process PDF with our new utility
+      const ocrResult = await processPDFWithOCR(state.file, (progress: PDFProcessingProgress) => {
+        setCurrentStep(progress.step);
+        setProcessingProgress({
+          pageNumber: progress.pageNumber,
+          totalPages: progress.totalPages,
+          ocrProgress: progress.ocrProgress
         });
-      } catch (tesseractError) {
-        console.error("Tesseract failed to process PDF:", tesseractError);
-        
-        // Fallback: Use mock data for now and inform user
-        toast({
-          title: "OCR Warning",
-          description: "PDF processing failed, using fallback text extraction",
-          variant: "destructive",
-        });
-        
-        // Mock extracted text for PDFs
-        ocrResult = {
-          data: {
-            text: `
-              COMMERCIAL REAL ESTATE PURCHASE CONTRACT
-              
-              Property Address: 123 Main Street, Oklahoma City, OK 73102
-              Legal Description: Lot 1, Block 2, Commercial District Addition
-              
-              Buyer: ABC Holdings LLC
-              Seller: XYZ Properties Inc
-              
-              Purchase Price: $500,000.00
-              Earnest Money: $25,000.00
-              
-              Execution Date: 12/15/2023
-              Closing Date: 01/30/2024
-            `,
-            confidence: 75
-          }
-        };
-      }
+      });
 
-      console.log("OCR completed");
-      console.log("Extracted text length:", ocrResult.data.text.length);
-      console.log("OCR confidence:", ocrResult.data.confidence);
-      console.log("First 500 characters:", ocrResult.data.text.substring(0, 500));
+      console.log("PDF processing completed");
+      console.log("Extracted text length:", ocrResult.text.length);
+      console.log("Average OCR confidence:", ocrResult.confidence);
       
       setCurrentStep("extraction");
       toast({
@@ -244,7 +207,7 @@ const ProcessContract = () => {
       });
 
       // Extract fields from OCR text
-      const extractedFields = extractFieldsFromText(ocrResult.data.text);
+      const extractedFields = extractFieldsFromText(ocrResult.text);
       
       // Add default fields if not found
       const requiredFields = [
@@ -277,16 +240,10 @@ const ProcessContract = () => {
 
       toast({
         title: "Processing complete!",
-        description: `Extracted ${extractedFields.length} fields from document`,
+        description: `Extracted ${extractedFields.length} fields from ${processingProgress.totalPages || 1} page(s)`,
       });
     } catch (error) {
-      console.error("Processing error details:", {
-        error: error,
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        fileType: state.file.type,
-        fileName: state.file.name
-      });
+      console.error("Processing error:", error);
       
       toast({
         title: "Processing failed",
@@ -353,6 +310,21 @@ const ProcessContract = () => {
     field => field.confidence < state.confidenceThreshold
   ).length;
 
+  const getProgressMessage = () => {
+    switch (currentStep) {
+      case "loading":
+        return "Loading PDF document...";
+      case "converting":
+        return `Converting page ${processingProgress.pageNumber}/${processingProgress.totalPages} to image...`;
+      case "ocr":
+        return `Running OCR on page ${processingProgress.pageNumber}/${processingProgress.totalPages}...`;
+      case "extraction":
+        return "Extracting contract fields...";
+      default:
+        return "Processing...";
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -399,20 +371,22 @@ const ProcessContract = () => {
           <div className="text-center py-12">
             <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-red-700 mb-4"></div>
             <h3 className="text-lg font-medium text-gray-900 mb-2">
-              {currentStep === "ocr" && "Running OCR..."}
-              {currentStep === "extraction" && "Extracting Fields..."}
+              {getProgressMessage()}
             </h3>
-            <p className="text-gray-600 mb-4">
-              {currentStep === "ocr" && "Converting document to text"}
-              {currentStep === "extraction" && "Using pattern matching to identify contract data"}
-            </p>
-            {currentStep === "ocr" && ocrProgress > 0 && (
+            
+            {processingProgress.totalPages && (
+              <p className="text-gray-600 mb-4">
+                Processing {processingProgress.totalPages} page{processingProgress.totalPages > 1 ? 's' : ''}
+              </p>
+            )}
+            
+            {currentStep === "ocr" && processingProgress.ocrProgress && (
               <div className="w-64 mx-auto bg-gray-200 rounded-full h-2">
                 <div 
                   className="bg-red-700 h-2 rounded-full transition-all duration-300" 
-                  style={{ width: `${ocrProgress}%` }}
+                  style={{ width: `${processingProgress.ocrProgress}%` }}
                 ></div>
-                <p className="text-sm text-gray-500 mt-2">{ocrProgress}% complete</p>
+                <p className="text-sm text-gray-500 mt-2">{processingProgress.ocrProgress}% complete</p>
               </div>
             )}
           </div>
