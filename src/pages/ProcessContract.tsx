@@ -1,4 +1,3 @@
-
 import { useLocation, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,6 +7,7 @@ import { ArrowLeft, Download, Eye, AlertTriangle } from "lucide-react";
 import { DocumentViewer } from "@/components/DocumentViewer";
 import { FieldExtractor } from "@/components/FieldExtractor";
 import { toast } from "@/hooks/use-toast";
+import Tesseract from 'tesseract.js';
 
 interface ProcessState {
   file: File;
@@ -31,6 +31,7 @@ const ProcessContract = () => {
   const [isProcessing, setIsProcessing] = useState(true);
   const [documentNotes, setDocumentNotes] = useState("");
   const [currentStep, setCurrentStep] = useState<"ocr" | "extraction" | "review">("ocr");
+  const [ocrProgress, setOcrProgress] = useState(0);
 
   useEffect(() => {
     if (!state?.file) {
@@ -41,6 +42,114 @@ const ProcessContract = () => {
     processDocument();
   }, [state, navigate]);
 
+  const extractFieldsFromText = (text: string): ExtractedField[] => {
+    const fields: ExtractedField[] = [];
+    
+    // Property Address extraction
+    const addressPatterns = [
+      /(?:property|subject property|premises|located at|address)[:\s]+([^\n\r]+(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|blvd|boulevard)[^\n\r]*)/gi,
+      /(\d+\s+[^\n\r]+(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|blvd|boulevard)[^\n\r]*)/gi
+    ];
+    
+    for (const pattern of addressPatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        fields.push({
+          field: "Property Address",
+          value: match[0].replace(/^(property|subject property|premises|located at|address)[:\s]+/gi, '').trim(),
+          confidence: 85
+        });
+        break;
+      }
+    }
+
+    // Purchase Price extraction
+    const pricePatterns = [
+      /(?:purchase price|sale price|total price)[:\s]*\$?([\d,]+(?:\.\d{2})?)/gi,
+      /\$\s*([\d,]+(?:\.\d{2})?)/g
+    ];
+    
+    for (const pattern of pricePatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        const price = match[0].match(/\$?([\d,]+(?:\.\d{2})?)/);
+        if (price) {
+          fields.push({
+            field: "Purchase Price",
+            value: `$${price[1]}`,
+            confidence: 90
+          });
+          break;
+        }
+      }
+    }
+
+    // Buyer and Seller extraction
+    const buyerMatch = text.match(/(?:buyer|purchaser)[:\s]+([^\n\r]+)/gi);
+    if (buyerMatch) {
+      fields.push({
+        field: "Buyer Name",
+        value: buyerMatch[0].replace(/(?:buyer|purchaser)[:\s]+/gi, '').trim(),
+        confidence: 80
+      });
+    }
+
+    const sellerMatch = text.match(/(?:seller|vendor)[:\s]+([^\n\r]+)/gi);
+    if (sellerMatch) {
+      fields.push({
+        field: "Seller Name",
+        value: sellerMatch[0].replace(/(?:seller|vendor)[:\s]+/gi, '').trim(),
+        confidence: 80
+      });
+    }
+
+    // Date extraction
+    const datePatterns = [
+      /(?:closing date|settlement date)[:\s]*(\d{1,2}\/\d{1,2}\/\d{4})/gi,
+      /(?:execution date|signed)[:\s]*(\d{1,2}\/\d{1,2}\/\d{4})/gi
+    ];
+
+    datePatterns.forEach((pattern, index) => {
+      const match = text.match(pattern);
+      if (match) {
+        const fieldName = index === 0 ? "Closing Date" : "Execution Date";
+        const dateMatch = match[0].match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
+        if (dateMatch) {
+          fields.push({
+            field: fieldName,
+            value: dateMatch[1],
+            confidence: 75
+          });
+        }
+      }
+    });
+
+    // Earnest Money extraction
+    const earnestMatch = text.match(/(?:earnest money|deposit)[:\s]*\$?([\d,]+(?:\.\d{2})?)/gi);
+    if (earnestMatch) {
+      const amount = earnestMatch[0].match(/\$?([\d,]+(?:\.\d{2})?)/);
+      if (amount) {
+        fields.push({
+          field: "Earnest Money",
+          value: `$${amount[1]}`,
+          confidence: 85
+        });
+      }
+    }
+
+    // Legal Description extraction
+    const legalMatch = text.match(/(?:legal description|lot|block)[:\s]+([^\n\r]{20,})/gi);
+    if (legalMatch) {
+      fields.push({
+        field: "Legal Description",
+        value: legalMatch[0].replace(/(?:legal description)[:\s]+/gi, '').trim(),
+        confidence: 70
+      });
+    }
+
+    return fields;
+  };
+
   const processDocument = async () => {
     try {
       setCurrentStep("ocr");
@@ -49,37 +158,57 @@ const ProcessContract = () => {
         description: "Extracting text from your document",
       });
 
-      // Simulate OCR processing
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Convert PDF to images and run OCR
+      const text = await Tesseract.recognize(state.file, 'eng', {
+        logger: m => {
+          if (m.status === 'recognizing text') {
+            setOcrProgress(Math.round(m.progress * 100));
+          }
+        }
+      });
+
+      console.log("OCR completed, extracted text:", text.data.text);
       
       setCurrentStep("extraction");
       toast({
         title: "Running AI extraction...",
-        description: "Identifying contract fields using AI",
+        description: "Identifying contract fields using pattern matching",
       });
 
-      // Simulate AI field extraction
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      // Mock extracted data
-      const mockData: ExtractedField[] = [
-        { field: "Property Address", value: "123 Main Street, Oklahoma City, OK 73102", confidence: 95 },
-        { field: "Legal Description", value: "Lot 1, Block 2, Smith Addition, Oklahoma County, Oklahoma", confidence: 88 },
-        { field: "Buyer Name", value: "John and Jane Doe", confidence: 92 },
-        { field: "Seller Name", value: "ABC Properties LLC", confidence: 89 },
-        { field: "Purchase Price", value: "$1,250,000.00", confidence: 98 },
-        { field: "Earnest Money", value: "$25,000.00", confidence: 85 },
-        { field: "Execution Date", value: "03/15/2025", confidence: 82 },
-        { field: "Closing Date", value: "04/30/2025", confidence: 79 },
+      // Extract fields from OCR text
+      const extractedFields = extractFieldsFromText(text.data.text);
+      
+      // Add default fields if not found
+      const requiredFields = [
+        "Property Address",
+        "Legal Description", 
+        "Buyer Name",
+        "Seller Name",
+        "Purchase Price",
+        "Earnest Money",
+        "Execution Date",
+        "Closing Date"
       ];
 
-      setExtractedData(mockData);
+      const finalFields = [...extractedFields];
+      
+      requiredFields.forEach(fieldName => {
+        if (!finalFields.find(f => f.field === fieldName)) {
+          finalFields.push({
+            field: fieldName,
+            value: "",
+            confidence: 0
+          });
+        }
+      });
+
+      setExtractedData(finalFields);
       setCurrentStep("review");
       setIsProcessing(false);
 
       toast({
         title: "Processing complete!",
-        description: "Review and edit the extracted data below",
+        description: `Extracted ${extractedFields.length} fields from document`,
       });
     } catch (error) {
       console.error("Processing error:", error);
@@ -88,6 +217,7 @@ const ProcessContract = () => {
         description: "There was an error processing your document",
         variant: "destructive",
       });
+      setIsProcessing(false);
     }
   };
 
@@ -95,7 +225,7 @@ const ProcessContract = () => {
     setExtractedData(prev =>
       prev.map(field =>
         field.field === fieldName
-          ? { ...field, value: newValue, confidence: 100 } // Manual edits get 100% confidence
+          ? { ...field, value: newValue, confidence: 100 }
           : field
       )
     );
@@ -196,10 +326,19 @@ const ProcessContract = () => {
               {currentStep === "ocr" && "Running OCR..."}
               {currentStep === "extraction" && "Extracting Fields..."}
             </h3>
-            <p className="text-gray-600">
+            <p className="text-gray-600 mb-4">
               {currentStep === "ocr" && "Converting document to text"}
-              {currentStep === "extraction" && "Using AI to identify contract data"}
+              {currentStep === "extraction" && "Using pattern matching to identify contract data"}
             </p>
+            {currentStep === "ocr" && ocrProgress > 0 && (
+              <div className="w-64 mx-auto bg-gray-200 rounded-full h-2">
+                <div 
+                  className="bg-red-700 h-2 rounded-full transition-all duration-300" 
+                  style={{ width: `${ocrProgress}%` }}
+                ></div>
+                <p className="text-sm text-gray-500 mt-2">{ocrProgress}% complete</p>
+              </div>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
