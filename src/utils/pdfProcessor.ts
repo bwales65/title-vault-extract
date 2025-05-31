@@ -56,7 +56,7 @@ export const processPDFWithOCR = async (
         useWorkerFetch: false,
         isEvalSupported: false,
         useSystemFonts: true,
-        standardFontDataUrl: false
+        standardFontDataUrl: ""
       });
       
       pdf = await loadingTask.promise;
