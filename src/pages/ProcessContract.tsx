@@ -3,9 +3,10 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Download, Eye, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Download, Eye, AlertTriangle, RefreshCw } from "lucide-react";
 import { DocumentViewer } from "@/components/DocumentViewer";
 import { FieldExtractor } from "@/components/FieldExtractor";
+import { ExtractedTextViewer } from "@/components/ExtractedTextViewer";
 import { toast } from "@/hooks/use-toast";
 import { processPDFWithOCR, PDFProcessingProgress } from "@/utils/pdfProcessor";
 
@@ -28,6 +29,8 @@ const ProcessContract = () => {
   const state = location.state as ProcessState;
 
   const [extractedData, setExtractedData] = useState<ExtractedField[]>([]);
+  const [extractedText, setExtractedText] = useState<string>("");
+  const [ocrConfidence, setOcrConfidence] = useState<number>(0);
   const [isProcessing, setIsProcessing] = useState(true);
   const [documentNotes, setDocumentNotes] = useState("");
   const [currentStep, setCurrentStep] = useState<"loading" | "converting" | "ocr" | "extraction" | "review" | "fallback">("loading");
@@ -170,6 +173,41 @@ const ProcessContract = () => {
     return fields;
   };
 
+  const reprocessFields = () => {
+    console.log("Reprocessing fields from updated text...");
+    const newFields = extractFieldsFromText(extractedText);
+    
+    const requiredFields = [
+      "Property Address",
+      "Legal Description", 
+      "Buyer Name",
+      "Seller Name",
+      "Purchase Price",
+      "Earnest Money",
+      "Execution Date",
+      "Closing Date"
+    ];
+
+    const finalFields = [...newFields];
+    
+    requiredFields.forEach(fieldName => {
+      if (!finalFields.find(f => f.field === fieldName)) {
+        finalFields.push({
+          field: fieldName,
+          value: "",
+          confidence: 0
+        });
+      }
+    });
+
+    setExtractedData(finalFields);
+    
+    toast({
+      title: "Fields updated",
+      description: `Re-extracted ${newFields.length} fields from corrected text`,
+    });
+  };
+
   const processDocument = async () => {
     try {
       console.log("Starting document processing...");
@@ -191,13 +229,16 @@ const ProcessContract = () => {
           error: progress.error
         });
 
-        // Show error toasts for page-level errors
         if (progress.error) {
           console.warn("Page processing error:", progress.error);
         }
       });
 
       console.log("PDF processing completed");
+      
+      // Store the extracted text and confidence
+      setExtractedText(ocrResult.text);
+      setOcrConfidence(ocrResult.confidence);
       
       setCurrentStep("extraction");
       toast({
@@ -437,9 +478,9 @@ const ProcessContract = () => {
             </Button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Document Viewer */}
-            <Card className="h-fit">
+          <div className="space-y-6">
+            {/* Document Viewer - Full Width */}
+            <Card>
               <CardHeader>
                 <CardTitle className="flex items-center">
                   <Eye className="h-5 w-5 mr-2" />
@@ -451,21 +492,40 @@ const ProcessContract = () => {
               </CardContent>
             </Card>
 
-            {/* Field Extractor */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Extracted Data</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <FieldExtractor
-                  extractedData={extractedData}
-                  confidenceThreshold={state.confidenceThreshold}
-                  onFieldUpdate={handleFieldUpdate}
-                  documentNotes={documentNotes}
-                  onNotesChange={setDocumentNotes}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Extracted Text Viewer */}
+              <div className="space-y-4">
+                <ExtractedTextViewer
+                  extractedText={extractedText}
+                  confidence={ocrConfidence}
+                  onTextUpdate={setExtractedText}
                 />
-              </CardContent>
-            </Card>
+                <Button 
+                  onClick={reprocessFields} 
+                  className="w-full bg-red-700 hover:bg-red-800"
+                  disabled={!extractedText.trim()}
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Re-extract Fields from Updated Text
+                </Button>
+              </div>
+
+              {/* Field Extractor */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Extracted Data</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <FieldExtractor
+                    extractedData={extractedData}
+                    confidenceThreshold={state.confidenceThreshold}
+                    onFieldUpdate={handleFieldUpdate}
+                    documentNotes={documentNotes}
+                    onNotesChange={setDocumentNotes}
+                  />
+                </CardContent>
+              </Card>
+            </div>
           </div>
         )}
       </main>

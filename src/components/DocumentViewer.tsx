@@ -30,7 +30,7 @@ export const DocumentViewer = ({ file }: DocumentViewerProps) => {
 
   if (hasError) {
     return (
-      <div className="w-full h-[600px] border rounded-lg overflow-hidden bg-red-50 flex items-center justify-center">
+      <div className="w-full h-[1200px] border rounded-lg overflow-hidden bg-red-50 flex items-center justify-center">
         <div className="text-center p-6">
           <AlertTriangle className="h-8 w-8 text-red-500 mx-auto mb-3" />
           <p className="text-red-700 font-medium">Unable to display PDF</p>
@@ -41,7 +41,7 @@ export const DocumentViewer = ({ file }: DocumentViewerProps) => {
   }
 
   return (
-    <div className="w-full h-[600px] border rounded-lg overflow-hidden bg-gray-50">
+    <div className="w-full h-[1200px] border rounded-lg overflow-hidden bg-gray-50">
       {pdfUrl ? (
         <iframe
           src={pdfUrl}
