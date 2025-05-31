@@ -13,6 +13,30 @@ export interface PDFProcessingProgress {
   message?: string;
 }
 
+// Enhanced debugging function
+const debugCanvas = (canvas: HTMLCanvasElement, pageNum: number) => {
+  console.log(`=== CANVAS DEBUG PAGE ${pageNum} ===`);
+  console.log(`Canvas dimensions: ${canvas.width}x${canvas.height}`);
+  console.log(`Canvas exists:`, !!canvas);
+  
+  const context = canvas.getContext('2d');
+  if (context) {
+    const imageData = context.getImageData(0, 0, Math.min(10, canvas.width), Math.min(10, canvas.height));
+    console.log(`Canvas has context:`, !!context);
+    console.log(`Sample pixel data:`, imageData.data.slice(0, 20));
+    console.log(`Canvas is blank:`, imageData.data.every(pixel => pixel === 0));
+  }
+};
+
+// Test if canvas contains actual content
+const isCanvasBlank = (canvas: HTMLCanvasElement): boolean => {
+  const context = canvas.getContext('2d');
+  if (!context) return true;
+  
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  return imageData.data.every(pixel => pixel === 0);
+};
+
 // Fallback function for when PDF.js fails completely
 const fallbackPDFProcessing = async (
   file: File,
@@ -35,7 +59,13 @@ export const processPDFWithOCR = async (
   file: File,
   onProgress?: (progress: PDFProcessingProgress) => void
 ): Promise<{ text: string; confidence: number }> => {
-  console.log("Starting PDF processing with Claude's recommended approach...");
+  console.log("=== STARTING PDF PROCESSING WITH ENHANCED DEBUGGING ===");
+  console.log("File details:", {
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    lastModified: new Date(file.lastModified)
+  });
   
   try {
     // Load PDF
@@ -43,25 +73,28 @@ export const processPDFWithOCR = async (
     const arrayBuffer = await file.arrayBuffer();
     console.log("PDF file read into array buffer, size:", arrayBuffer.byteLength);
     
-    // Simplified PDF loading with basic configuration
+    // Enhanced PDF loading with more explicit configuration
     const loadingTask = pdfjsLib.getDocument({
       data: arrayBuffer,
       useWorkerFetch: false,
-      isEvalSupported: false
+      isEvalSupported: false,
+      maxImageSize: -1,
+      cMapPacked: true
     });
     
     const pdf = await loadingTask.promise;
     const totalPages = pdf.numPages;
     console.log(`PDF loaded successfully. Total pages: ${totalPages}`);
+    console.log(`PDF metadata:`, await pdf.getMetadata().catch(() => "No metadata"));
     
     let allText = '';
     let totalConfidence = 0;
     let processedPages = 0;
     
-    // Process each page using Claude's recommended approach
+    // Process each page with enhanced debugging
     for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
       try {
-        console.log(`Processing page ${pageNum}/${totalPages}`);
+        console.log(`\n=== PROCESSING PAGE ${pageNum}/${totalPages} ===`);
         
         onProgress?.({ 
           step: 'converting', 
@@ -71,81 +104,146 @@ export const processPDFWithOCR = async (
         });
         
         const page = await pdf.getPage(pageNum);
-        console.log(`Page ${pageNum} loaded, dimensions:`, page.getViewport({ scale: 1 }));
+        const viewport = page.getViewport({ scale: 1 });
+        console.log(`Page ${pageNum} viewport:`, {
+          width: viewport.width,
+          height: viewport.height,
+          rotation: viewport.rotation
+        });
         
-        // Use Claude's recommended scale of 2.0
-        const scale = 2.0;
-        const viewport = page.getViewport({ scale });
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
+        // Try multiple scales to find what works
+        const scales = [1.5, 2.0, 2.5];
+        let ocrResult = null;
         
-        if (!context) {
-          throw new Error('Failed to get canvas context');
+        for (const scale of scales) {
+          try {
+            console.log(`Trying scale ${scale} for page ${pageNum}`);
+            
+            const scaledViewport = page.getViewport({ scale });
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            
+            if (!context) {
+              console.error('Failed to get canvas context');
+              continue;
+            }
+            
+            canvas.height = scaledViewport.height;
+            canvas.width = scaledViewport.width;
+            
+            console.log(`Canvas created: ${canvas.width}x${canvas.height} (scale: ${scale})`);
+            
+            // Clear canvas first
+            context.fillStyle = 'white';
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Render PDF page to canvas
+            await page.render({
+              canvasContext: context,
+              viewport: scaledViewport,
+              intent: 'display'
+            }).promise;
+            
+            console.log(`Page ${pageNum} rendered to canvas successfully`);
+            debugCanvas(canvas, pageNum);
+            
+            // Check if canvas has content
+            if (isCanvasBlank(canvas)) {
+              console.warn(`Canvas is blank for page ${pageNum} at scale ${scale}`);
+              continue;
+            }
+            
+            // Convert canvas to different formats for testing
+            const formats = ['image/png', 'image/jpeg'];
+            
+            for (const format of formats) {
+              try {
+                console.log(`Converting to ${format} for page ${pageNum}`);
+                const imageData = canvas.toDataURL(format, 0.95);
+                
+                if (!imageData || imageData.length < 100) {
+                  console.warn(`Invalid image data for ${format}:`, imageData?.substring(0, 50));
+                  continue;
+                }
+                
+                console.log(`Image data created successfully:`, {
+                  format,
+                  length: imageData.length,
+                  prefix: imageData.substring(0, 50) + '...'
+                });
+                
+                // Run OCR
+                onProgress?.({ 
+                  step: 'ocr', 
+                  pageNumber: pageNum, 
+                  totalPages,
+                  message: `Running OCR on page ${pageNum} (${format}, scale ${scale})...`
+                });
+                
+                console.log(`Starting OCR for page ${pageNum} with ${format} at scale ${scale}`);
+                
+                const result = await Tesseract.recognize(imageData, 'eng', {
+                  logger: (m) => {
+                    console.log(`OCR Progress:`, m);
+                    if (m.status === 'recognizing text') {
+                      onProgress?.({ 
+                        step: 'ocr', 
+                        pageNumber: pageNum, 
+                        totalPages,
+                        ocrProgress: Math.round(m.progress * 100),
+                        message: `OCR progress: ${Math.round(m.progress * 100)}%`
+                      });
+                    }
+                  }
+                });
+                
+                console.log(`OCR completed for page ${pageNum}:`, {
+                  confidence: result.data.confidence,
+                  textLength: result.data.text.length,
+                  textPreview: result.data.text.substring(0, 100)
+                });
+                
+                if (result.data.confidence > 0) {
+                  ocrResult = result;
+                  console.log(`SUCCESS! Found working configuration: ${format} at scale ${scale}`);
+                  break;
+                }
+                
+              } catch (formatError) {
+                console.error(`Error with format ${format}:`, formatError);
+              }
+            }
+            
+            if (ocrResult) break;
+            
+          } catch (scaleError) {
+            console.error(`Error with scale ${scale}:`, scaleError);
+          }
         }
         
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
-        
-        console.log(`Canvas created for page ${pageNum}: ${canvas.width}x${canvas.height}`);
-        
-        // Render PDF page to canvas
-        await page.render({
-          canvasContext: context,
-          viewport: viewport
-        }).promise;
-        
-        console.log(`Page ${pageNum} rendered to canvas successfully`);
-        
-        // Convert canvas to Data URL (Claude's recommended approach)
-        const imageData = canvas.toDataURL('image/png');
-        console.log(`Canvas converted to Data URL for page ${pageNum}, length:`, imageData.length);
-        console.log(`Data URL preview:`, imageData.substring(0, 100) + '...');
-        
-        // Run OCR with simplified configuration
-        onProgress?.({ 
-          step: 'ocr', 
-          pageNumber: pageNum, 
-          totalPages,
-          message: `Running OCR on page ${pageNum}...`
-        });
-        
-        console.log(`Starting OCR for page ${pageNum} with Data URL method...`);
-        
-        const ocrResult = await Tesseract.recognize(imageData, 'eng', {
-          logger: (m) => {
-            if (m.status === 'recognizing text') {
-              onProgress?.({ 
-                step: 'ocr', 
-                pageNumber: pageNum, 
-                totalPages,
-                ocrProgress: Math.round(m.progress * 100),
-                message: `OCR progress: ${Math.round(m.progress * 100)}%`
-              });
-            }
-          }
-        });
-        
-        console.log(`Page ${pageNum} OCR completed.`);
-        console.log(`- Confidence: ${ocrResult.data.confidence}%`);
-        console.log(`- Text length: ${ocrResult.data.text.length}`);
-        console.log(`- Text preview:`, ocrResult.data.text.substring(0, 200));
-        
-        allText += `\n--- Page ${pageNum} ---\n${ocrResult.data.text}\n`;
-        totalConfidence += ocrResult.data.confidence;
-        processedPages++;
+        if (ocrResult) {
+          allText += `\n--- Page ${pageNum} ---\n${ocrResult.data.text}\n`;
+          totalConfidence += ocrResult.data.confidence;
+          processedPages++;
+        } else {
+          console.error(`All OCR attempts failed for page ${pageNum}`);
+          allText += `\n--- Page ${pageNum} (OCR Failed) ---\n[OCR processing failed for this page]\n`;
+          processedPages++;
+        }
         
       } catch (pageError) {
         console.error(`Error processing page ${pageNum}:`, pageError);
-        allText += `\n--- Page ${pageNum} (Error) ---\n[Page processing failed]\n`;
+        allText += `\n--- Page ${pageNum} (Error) ---\n[Page processing failed: ${pageError.message}]\n`;
         processedPages++;
       }
     }
     
     const averageConfidence = processedPages > 0 ? totalConfidence / processedPages : 0;
     
-    console.log("PDF processing completed successfully");
+    console.log("=== PDF PROCESSING COMPLETED ===");
     console.log(`Total text length: ${allText.length}`);
     console.log(`Average confidence: ${averageConfidence}%`);
+    console.log(`Processed pages: ${processedPages}/${totalPages}`);
     console.log(`Full extracted text:`, allText);
     
     return {
@@ -154,7 +252,7 @@ export const processPDFWithOCR = async (
     };
     
   } catch (error) {
-    console.error("PDF processing failed completely:", error);
+    console.error("=== PDF PROCESSING FAILED COMPLETELY ===", error);
     return await fallbackPDFProcessing(file, onProgress);
   }
 };
