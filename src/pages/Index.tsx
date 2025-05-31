@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Upload, FileText, Settings } from "lucide-react";
+import { Upload, FileText, Settings, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "@/hooks/use-toast";
 
@@ -25,6 +25,15 @@ const Index = () => {
         description: "Please select a PDF file.",
         variant: "destructive",
       });
+    }
+  };
+
+  const handleRemoveFile = () => {
+    setSelectedFile(null);
+    // Clear the file input
+    const fileInput = document.getElementById("file-upload") as HTMLInputElement;
+    if (fileInput) {
+      fileInput.value = "";
     }
   };
 
@@ -112,9 +121,20 @@ const Index = () => {
                 className="cursor-pointer"
               />
               {selectedFile && (
-                <div className="flex items-center text-sm text-gray-600 mt-2">
-                  <FileText className="h-4 w-4 mr-2" />
-                  {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
+                <div className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
+                  <div className="flex items-center text-sm text-gray-600">
+                    <FileText className="h-4 w-4 mr-2" />
+                    {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRemoveFile}
+                    className="text-red-600 hover:text-red-800 hover:bg-red-50"
+                  >
+                    <X className="h-4 w-4" />
+                    Remove
+                  </Button>
                 </div>
               )}
             </div>
