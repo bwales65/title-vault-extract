@@ -30,12 +30,14 @@ const ProcessContract = () => {
   const [extractedData, setExtractedData] = useState<ExtractedField[]>([]);
   const [isProcessing, setIsProcessing] = useState(true);
   const [documentNotes, setDocumentNotes] = useState("");
-  const [currentStep, setCurrentStep] = useState<"loading" | "converting" | "ocr" | "extraction" | "review">("loading");
+  const [currentStep, setCurrentStep] = useState<"loading" | "converting" | "ocr" | "extraction" | "review" | "fallback">("loading");
   const [processingProgress, setProcessingProgress] = useState<{
     pageNumber?: number;
     totalPages?: number;
     ocrProgress?: number;
+    message?: string;
   }>({});
+  const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
     if (!state?.file) {
@@ -170,11 +172,7 @@ const ProcessContract = () => {
   const processDocument = async () => {
     try {
       console.log("Starting document processing...");
-      console.log("File details:", {
-        name: state.file.name,
-        size: state.file.size,
-        type: state.file.type
-      });
+      setHasError(false);
 
       // Check if file is PDF
       if (state.file.type !== "application/pdf") {
@@ -183,22 +181,30 @@ const ProcessContract = () => {
 
       toast({
         title: "Starting PDF processing...",
-        description: "Converting PDF pages to images for OCR",
+        description: "Using improved PDF.js worker configuration",
       });
 
-      // Process PDF with our new utility
+      // Process PDF with our improved utility
       const ocrResult = await processPDFWithOCR(state.file, (progress: PDFProcessingProgress) => {
         setCurrentStep(progress.step);
         setProcessingProgress({
           pageNumber: progress.pageNumber,
           totalPages: progress.totalPages,
-          ocrProgress: progress.ocrProgress
+          ocrProgress: progress.ocrProgress,
+          message: progress.message
         });
       });
 
       console.log("PDF processing completed");
-      console.log("Extracted text length:", ocrResult.text.length);
-      console.log("Average OCR confidence:", ocrResult.confidence);
+      
+      if (ocrResult.confidence === 0) {
+        setHasError(true);
+        toast({
+          title: "Processing completed with warnings",
+          description: "PDF processing encountered issues. Manual review recommended.",
+          variant: "destructive",
+        });
+      }
       
       setCurrentStep("extraction");
       toast({
@@ -233,7 +239,6 @@ const ProcessContract = () => {
         }
       });
 
-      console.log("Final extracted fields:", finalFields);
       setExtractedData(finalFields);
       setCurrentStep("review");
       setIsProcessing(false);
@@ -244,6 +249,7 @@ const ProcessContract = () => {
       });
     } catch (error) {
       console.error("Processing error:", error);
+      setHasError(true);
       
       toast({
         title: "Processing failed",
@@ -311,6 +317,10 @@ const ProcessContract = () => {
   ).length;
 
   const getProgressMessage = () => {
+    if (processingProgress.message) {
+      return processingProgress.message;
+    }
+    
     switch (currentStep) {
       case "loading":
         return "Loading PDF document...";
@@ -320,6 +330,8 @@ const ProcessContract = () => {
         return `Running OCR on page ${processingProgress.pageNumber}/${processingProgress.totalPages}...`;
       case "extraction":
         return "Extracting contract fields...";
+      case "fallback":
+        return "Using fallback processing method...";
       default:
         return "Processing...";
     }
@@ -387,6 +399,14 @@ const ProcessContract = () => {
                   style={{ width: `${processingProgress.ocrProgress}%` }}
                 ></div>
                 <p className="text-sm text-gray-500 mt-2">{processingProgress.ocrProgress}% complete</p>
+              </div>
+            )}
+
+            {hasError && (
+              <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <p className="text-yellow-800">
+                  Processing encountered issues. The system will continue with available data.
+                </p>
               </div>
             )}
           </div>
