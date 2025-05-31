@@ -1,6 +1,9 @@
 
+import * as pdfjsLib from 'pdfjs-dist';
 import Tesseract from 'tesseract.js';
-import { fromBuffer } from 'pdf2pic';
+
+// Configure PDF.js worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/node_modules/pdfjs-dist/build/pdf.worker.min.mjs';
 
 export interface PDFProcessingProgress {
   step: 'loading' | 'converting' | 'ocr' | 'fallback';
@@ -14,7 +17,7 @@ export const processPDFWithOCR = async (
   file: File,
   onProgress?: (progress: PDFProcessingProgress) => void
 ): Promise<{ text: string; confidence: number }> => {
-  console.log("=== STARTING PDF-TO-JPEG PROCESSING ===");
+  console.log("=== STARTING BROWSER-COMPATIBLE PDF PROCESSING ===");
   console.log("File details:", {
     name: file.name,
     size: file.size,
@@ -25,24 +28,12 @@ export const processPDFWithOCR = async (
     // Load PDF
     onProgress?.({ step: 'loading', message: 'Loading PDF document...' });
     const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
     
-    console.log("PDF loaded into buffer, size:", buffer.length);
+    console.log("PDF loaded into buffer, size:", arrayBuffer.byteLength);
     
-    // Configure PDF to image conversion
-    const convert = fromBuffer(buffer, {
-      density: 300,           // Higher DPI for better OCR
-      saveFilename: "page",
-      savePath: "./",
-      format: "jpeg",
-      width: 2000,           // High resolution
-      height: 2600,
-      quality: 95            // High quality JPEG
-    });
-    
-    // Get page count first
-    const pageCount = await convert.bulk(-1, { responseType: "buffer" });
-    const totalPages = pageCount.length;
+    // Load PDF with pdfjs
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const totalPages = pdf.numPages;
     
     console.log(`PDF has ${totalPages} pages`);
     
@@ -59,24 +50,40 @@ export const processPDFWithOCR = async (
           step: 'converting', 
           pageNumber: pageNum, 
           totalPages,
-          message: `Converting page ${pageNum} to JPEG...`
+          message: `Converting page ${pageNum} to image...`
         });
         
-        // Convert single page to JPEG
-        const pageResult = await convert(pageNum, { responseType: "buffer" });
-        const imageBuffer = pageResult.buffer;
+        // Get page
+        const page = await pdf.getPage(pageNum);
         
-        if (!imageBuffer || imageBuffer.length === 0) {
-          console.error(`Failed to convert page ${pageNum} to image`);
+        // Set up canvas with high resolution
+        const scale = 2.0;
+        const viewport = page.getViewport({ scale });
+        
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        
+        if (!context) {
+          console.error(`Failed to get canvas context for page ${pageNum}`);
           continue;
         }
         
-        console.log(`Page ${pageNum} converted to JPEG, size: ${imageBuffer.length} bytes`);
+        // Render page to canvas
+        const renderContext = {
+          canvasContext: context,
+          viewport: viewport
+        };
         
-        // Convert buffer to base64 data URL for Tesseract
-        const base64Image = `data:image/jpeg;base64,${imageBuffer.toString('base64')}`;
+        await page.render(renderContext).promise;
         
-        // Run OCR on the JPEG
+        console.log(`Page ${pageNum} rendered to canvas`);
+        
+        // Convert canvas to data URL
+        const imageDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+        
+        // Run OCR on the image
         onProgress?.({ 
           step: 'ocr', 
           pageNumber: pageNum, 
@@ -86,7 +93,7 @@ export const processPDFWithOCR = async (
         
         console.log(`Starting OCR for page ${pageNum}`);
         
-        const ocrResult = await Tesseract.recognize(base64Image, 'eng', {
+        const ocrResult = await Tesseract.recognize(imageDataUrl, 'eng', {
           logger: (m) => {
             if (m.status === 'recognizing text') {
               onProgress?.({ 
@@ -115,6 +122,9 @@ export const processPDFWithOCR = async (
           allText += `\n--- Page ${pageNum} (No text found) ---\n`;
           processedPages++;
         }
+        
+        // Clean up canvas
+        canvas.remove();
         
       } catch (pageError) {
         console.error(`Error processing page ${pageNum}:`, pageError);
