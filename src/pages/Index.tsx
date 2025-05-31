@@ -49,7 +49,12 @@ const Index = () => {
   };
 
   const handleUpload = () => {
+    console.log("Process Contract button clicked!");
+    console.log("Selected file:", selectedFile);
+    console.log("Closer initials:", closerInitials);
+    
     if (!selectedFile || !closerInitials) {
+      console.log("Missing information - showing toast");
       toast({
         title: "Missing information",
         description: "Please select a file and enter closer initials.",
@@ -60,6 +65,7 @@ const Index = () => {
 
     const fileId = generateFileId();
     console.log("Processing file:", selectedFile.name, "with ID:", fileId);
+    console.log("About to navigate to /process");
     
     // Navigate to processing page with file data
     navigate("/process", {
@@ -69,6 +75,7 @@ const Index = () => {
         confidenceThreshold,
       },
     });
+    console.log("Navigate call completed");
   };
 
   return (
