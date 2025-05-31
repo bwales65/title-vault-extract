@@ -146,7 +146,7 @@ export const processPDFWithOCR = async (
           }, 'image/png', 1.0); // Maximum quality
         });
         
-        // Run OCR on the page image with better settings
+        // Run OCR on the page image with simplified settings
         onProgress?.({ 
           step: 'ocr', 
           pageNumber: pageNum, 
@@ -167,9 +167,7 @@ export const processPDFWithOCR = async (
                 message: `OCR progress: ${Math.round(m.progress * 100)}%`
               });
             }
-          },
-          tessedit_pageseg_mode: Tesseract.PSM.AUTO,
-          tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/$():;-# ',
+          }
         });
         
         console.log(`Page ${pageNum} OCR completed.`);
