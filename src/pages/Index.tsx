@@ -1,4 +1,3 @@
-
 import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,6 +18,7 @@ const Index = () => {
     const file = event.target.files?.[0];
     if (file && file.type === "application/pdf") {
       setSelectedFile(file);
+      console.log("File selected:", file.name);
     } else {
       toast({
         title: "Invalid file type",
@@ -29,12 +29,18 @@ const Index = () => {
   };
 
   const handleRemoveFile = () => {
+    console.log("Remove button clicked");
     setSelectedFile(null);
     // Clear the file input
     const fileInput = document.getElementById("file-upload") as HTMLInputElement;
     if (fileInput) {
       fileInput.value = "";
+      console.log("File input cleared");
     }
+    toast({
+      title: "File removed",
+      description: "The selected file has been removed.",
+    });
   };
 
   const generateFileId = () => {
