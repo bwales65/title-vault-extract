@@ -43,6 +43,7 @@ const ProcessContract = () => {
   }, [state, navigate]);
 
   const extractFieldsFromText = (text: string): ExtractedField[] => {
+    console.log("Starting field extraction from text:", text.substring(0, 200) + "...");
     const fields: ExtractedField[] = [];
     
     // Property Address extraction
@@ -54,9 +55,11 @@ const ProcessContract = () => {
     for (const pattern of addressPatterns) {
       const match = text.match(pattern);
       if (match) {
+        const address = match[0].replace(/^(property|subject property|premises|located at|address)[:\s]+/gi, '').trim();
+        console.log("Found address:", address);
         fields.push({
           field: "Property Address",
-          value: match[0].replace(/^(property|subject property|premises|located at|address)[:\s]+/gi, '').trim(),
+          value: address,
           confidence: 85
         });
         break;
@@ -74,6 +77,7 @@ const ProcessContract = () => {
       if (match) {
         const price = match[0].match(/\$?([\d,]+(?:\.\d{2})?)/);
         if (price) {
+          console.log("Found price:", price[1]);
           fields.push({
             field: "Purchase Price",
             value: `$${price[1]}`,
@@ -87,18 +91,22 @@ const ProcessContract = () => {
     // Buyer and Seller extraction
     const buyerMatch = text.match(/(?:buyer|purchaser)[:\s]+([^\n\r]+)/gi);
     if (buyerMatch) {
+      const buyer = buyerMatch[0].replace(/(?:buyer|purchaser)[:\s]+/gi, '').trim();
+      console.log("Found buyer:", buyer);
       fields.push({
         field: "Buyer Name",
-        value: buyerMatch[0].replace(/(?:buyer|purchaser)[:\s]+/gi, '').trim(),
+        value: buyer,
         confidence: 80
       });
     }
 
     const sellerMatch = text.match(/(?:seller|vendor)[:\s]+([^\n\r]+)/gi);
     if (sellerMatch) {
+      const seller = sellerMatch[0].replace(/(?:seller|vendor)[:\s]+/gi, '').trim();
+      console.log("Found seller:", seller);
       fields.push({
         field: "Seller Name",
-        value: sellerMatch[0].replace(/(?:seller|vendor)[:\s]+/gi, '').trim(),
+        value: seller,
         confidence: 80
       });
     }
@@ -115,6 +123,7 @@ const ProcessContract = () => {
         const fieldName = index === 0 ? "Closing Date" : "Execution Date";
         const dateMatch = match[0].match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
         if (dateMatch) {
+          console.log(`Found ${fieldName}:`, dateMatch[1]);
           fields.push({
             field: fieldName,
             value: dateMatch[1],
@@ -129,6 +138,7 @@ const ProcessContract = () => {
     if (earnestMatch) {
       const amount = earnestMatch[0].match(/\$?([\d,]+(?:\.\d{2})?)/);
       if (amount) {
+        console.log("Found earnest money:", amount[1]);
         fields.push({
           field: "Earnest Money",
           value: `$${amount[1]}`,
@@ -140,34 +150,50 @@ const ProcessContract = () => {
     // Legal Description extraction
     const legalMatch = text.match(/(?:legal description|lot|block)[:\s]+([^\n\r]{20,})/gi);
     if (legalMatch) {
+      const legal = legalMatch[0].replace(/(?:legal description)[:\s]+/gi, '').trim();
+      console.log("Found legal description:", legal);
       fields.push({
         field: "Legal Description",
-        value: legalMatch[0].replace(/(?:legal description)[:\s]+/gi, '').trim(),
+        value: legal,
         confidence: 70
       });
     }
 
+    console.log("Total fields extracted:", fields.length);
     return fields;
   };
 
   const processDocument = async () => {
     try {
+      console.log("Starting document processing...");
+      console.log("File details:", {
+        name: state.file.name,
+        size: state.file.size,
+        type: state.file.type
+      });
+
       setCurrentStep("ocr");
       toast({
         title: "Starting OCR processing...",
         description: "Extracting text from your document",
       });
 
+      console.log("Initializing Tesseract OCR...");
+
       // Convert PDF to images and run OCR
-      const text = await Tesseract.recognize(state.file, 'eng', {
+      const result = await Tesseract.recognize(state.file, 'eng', {
         logger: m => {
+          console.log("Tesseract progress:", m);
           if (m.status === 'recognizing text') {
             setOcrProgress(Math.round(m.progress * 100));
           }
         }
       });
 
-      console.log("OCR completed, extracted text:", text.data.text);
+      console.log("OCR completed successfully");
+      console.log("Extracted text length:", result.data.text.length);
+      console.log("OCR confidence:", result.data.confidence);
+      console.log("First 500 characters:", result.data.text.substring(0, 500));
       
       setCurrentStep("extraction");
       toast({
@@ -176,7 +202,7 @@ const ProcessContract = () => {
       });
 
       // Extract fields from OCR text
-      const extractedFields = extractFieldsFromText(text.data.text);
+      const extractedFields = extractFieldsFromText(result.data.text);
       
       // Add default fields if not found
       const requiredFields = [
@@ -202,6 +228,7 @@ const ProcessContract = () => {
         }
       });
 
+      console.log("Final extracted fields:", finalFields);
       setExtractedData(finalFields);
       setCurrentStep("review");
       setIsProcessing(false);
@@ -211,10 +238,17 @@ const ProcessContract = () => {
         description: `Extracted ${extractedFields.length} fields from document`,
       });
     } catch (error) {
-      console.error("Processing error:", error);
+      console.error("Processing error details:", {
+        error: error,
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        fileType: state.file.type,
+        fileName: state.file.name
+      });
+      
       toast({
         title: "Processing failed",
-        description: "There was an error processing your document",
+        description: error instanceof Error ? error.message : "There was an error processing your document",
         variant: "destructive",
       });
       setIsProcessing(false);
