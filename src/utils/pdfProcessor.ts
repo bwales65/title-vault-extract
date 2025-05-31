@@ -2,11 +2,8 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import Tesseract from 'tesseract.js';
 
-// Configure PDF.js to use the proper worker from node_modules
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.js',
-  import.meta.url
-).toString();
+// Use CDN worker URL as recommended by Claude
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 export interface PDFProcessingProgress {
   step: 'loading' | 'converting' | 'ocr' | 'fallback';
@@ -28,7 +25,6 @@ const fallbackPDFProcessing = async (
     message: 'PDF.js failed, using alternative method...' 
   });
 
-  // Create a simple file reader approach as last resort
   return {
     text: `[PDF processing failed - manual review required for file: ${file.name}]`,
     confidence: 0
@@ -39,53 +35,22 @@ export const processPDFWithOCR = async (
   file: File,
   onProgress?: (progress: PDFProcessingProgress) => void
 ): Promise<{ text: string; confidence: number }> => {
-  console.log("Starting PDF processing with improved worker setup...");
+  console.log("Starting PDF processing with Claude's recommended approach...");
   
   try {
-    // Load PDF with comprehensive error handling
+    // Load PDF
     onProgress?.({ step: 'loading', message: 'Loading PDF document...' });
     const arrayBuffer = await file.arrayBuffer();
     console.log("PDF file read into array buffer, size:", arrayBuffer.byteLength);
     
-    // Try to load the PDF with multiple fallback configurations
-    let pdf;
+    // Simplified PDF loading with basic configuration
+    const loadingTask = pdfjsLib.getDocument({
+      data: arrayBuffer,
+      useWorkerFetch: false,
+      isEvalSupported: false
+    });
     
-    try {
-      // Primary attempt: Use standard configuration
-      const loadingTask = pdfjsLib.getDocument({
-        data: arrayBuffer,
-        useWorkerFetch: false,
-        isEvalSupported: false,
-        useSystemFonts: true,
-        standardFontDataUrl: ""
-      });
-      
-      pdf = await loadingTask.promise;
-      console.log("PDF loaded successfully with standard config");
-      
-    } catch (workerError) {
-      console.warn("Standard PDF loading failed, trying compatibility mode:", workerError);
-      
-      // Fallback attempt: Disable features that might cause worker issues
-      try {
-        const fallbackLoadingTask = pdfjsLib.getDocument({
-          data: arrayBuffer,
-          disableFontFace: true,
-          disableRange: true,
-          disableStream: true,
-          useWorkerFetch: false,
-          isEvalSupported: false
-        });
-        
-        pdf = await fallbackLoadingTask.promise;
-        console.log("PDF loaded successfully with compatibility mode");
-        
-      } catch (compatibilityError) {
-        console.error("Both PDF loading methods failed:", compatibilityError);
-        return await fallbackPDFProcessing(file, onProgress);
-      }
-    }
-    
+    const pdf = await loadingTask.promise;
     const totalPages = pdf.numPages;
     console.log(`PDF loaded successfully. Total pages: ${totalPages}`);
     
@@ -93,7 +58,7 @@ export const processPDFWithOCR = async (
     let totalConfidence = 0;
     let processedPages = 0;
     
-    // Process each page with enhanced error handling
+    // Process each page using Claude's recommended approach
     for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
       try {
         console.log(`Processing page ${pageNum}/${totalPages}`);
@@ -108,8 +73,8 @@ export const processPDFWithOCR = async (
         const page = await pdf.getPage(pageNum);
         console.log(`Page ${pageNum} loaded, dimensions:`, page.getViewport({ scale: 1 }));
         
-        // Set up canvas for rendering with much higher resolution for better OCR
-        const scale = 3.0; // Increased from 2.0 for better quality
+        // Use Claude's recommended scale of 2.0
+        const scale = 2.0;
         const viewport = page.getViewport({ scale });
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
@@ -121,9 +86,6 @@ export const processPDFWithOCR = async (
         canvas.height = viewport.height;
         canvas.width = viewport.width;
         
-        // Set high quality rendering
-        context.imageSmoothingEnabled = false;
-        
         console.log(`Canvas created for page ${pageNum}: ${canvas.width}x${canvas.height}`);
         
         // Render PDF page to canvas
@@ -134,19 +96,12 @@ export const processPDFWithOCR = async (
         
         console.log(`Page ${pageNum} rendered to canvas successfully`);
         
-        // Convert canvas to blob for Tesseract with higher quality
-        const blob = await new Promise<Blob>((resolve, reject) => {
-          canvas.toBlob((blob) => {
-            if (blob) {
-              console.log(`Canvas converted to blob for page ${pageNum}, size:`, blob.size);
-              resolve(blob);
-            } else {
-              reject(new Error('Failed to convert canvas to blob'));
-            }
-          }, 'image/png', 1.0); // Maximum quality
-        });
+        // Convert canvas to Data URL (Claude's recommended approach)
+        const imageData = canvas.toDataURL('image/png');
+        console.log(`Canvas converted to Data URL for page ${pageNum}, length:`, imageData.length);
+        console.log(`Data URL preview:`, imageData.substring(0, 100) + '...');
         
-        // Run OCR on the page image with simplified settings
+        // Run OCR with simplified configuration
         onProgress?.({ 
           step: 'ocr', 
           pageNumber: pageNum, 
@@ -154,9 +109,9 @@ export const processPDFWithOCR = async (
           message: `Running OCR on page ${pageNum}...`
         });
         
-        console.log(`Starting OCR for page ${pageNum}...`);
+        console.log(`Starting OCR for page ${pageNum} with Data URL method...`);
         
-        const ocrResult = await Tesseract.recognize(blob, 'eng', {
+        const ocrResult = await Tesseract.recognize(imageData, 'eng', {
           logger: (m) => {
             if (m.status === 'recognizing text') {
               onProgress?.({ 
@@ -200,9 +155,6 @@ export const processPDFWithOCR = async (
     
   } catch (error) {
     console.error("PDF processing failed completely:", error);
-    
-    // If everything fails, use the fallback method
-    console.log("Attempting fallback processing...");
     return await fallbackPDFProcessing(file, onProgress);
   }
 };
