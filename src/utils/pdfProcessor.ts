@@ -24,6 +24,13 @@ try {
   console.warn('Worker setup failed, PDF.js will run in main thread:', error);
 }
 
+export interface PDFProcessingProgress {
+  step: 'loading' | 'converting' | 'ocr';
+  pageNumber?: number;
+  totalPages?: number;
+  ocrProgress?: number;
+}
+
 export const processPDFWithOCR = async (
   file: File,
   onProgress?: (progress: PDFProcessingProgress) => void
