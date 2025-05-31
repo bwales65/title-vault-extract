@@ -2,27 +2,8 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import Tesseract from 'tesseract.js';
 
-// Alternative worker setup - use inline worker or disable worker
+// Disable worker completely - PDF.js will run in main thread
 pdfjsLib.GlobalWorkerOptions.workerSrc = '';
-
-// Create a simple inline worker as fallback
-const createWorkerBlob = () => {
-  const workerCode = `
-    // Minimal PDF.js worker implementation
-    self.addEventListener('message', function(e) {
-      // Simple echo for now - PDF.js will handle this internally
-      self.postMessage(e.data);
-    });
-  `;
-  return URL.createObjectURL(new Blob([workerCode], { type: 'application/javascript' }));
-};
-
-// Set up worker
-try {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = createWorkerBlob();
-} catch (error) {
-  console.warn('Worker setup failed, PDF.js will run in main thread:', error);
-}
 
 export interface PDFProcessingProgress {
   step: 'loading' | 'converting' | 'ocr';
@@ -41,7 +22,16 @@ export const processPDFWithOCR = async (
     // Load PDF
     onProgress?.({ step: 'loading' });
     const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    
+    // Configure PDF.js to not use worker
+    const loadingTask = pdfjsLib.getDocument({
+      data: arrayBuffer,
+      useWorkerFetch: false,
+      isEvalSupported: false,
+      useSystemFonts: true
+    });
+    
+    const pdf = await loadingTask.promise;
     const totalPages = pdf.numPages;
     
     console.log(`PDF loaded successfully. Total pages: ${totalPages}`);
