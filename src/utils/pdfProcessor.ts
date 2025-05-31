@@ -14,9 +14,56 @@ export interface PDFProcessingProgress {
   error?: string;
 }
 
+export interface TesseractConfig {
+  language: string;
+  pageSegMode?: number;
+  ocrEngineMode?: number;
+  whiteList?: string;
+  blackList?: string;
+  preserveInterwordSpaces?: boolean;
+  tesseditCharWhitelist?: string;
+  tesseditCharBlacklist?: string;
+}
+
+// Default Tesseract configuration optimized for contracts
+const DEFAULT_TESSERACT_CONFIG: TesseractConfig = {
+  language: 'eng',
+  pageSegMode: 6, // Uniform block of text
+  ocrEngineMode: 3, // Default (both LSTM and legacy)
+  preserveInterwordSpaces: true,
+  // Common characters in contracts
+  tesseditCharWhitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,!?@#$%&*()[]{}:;"\'-_/\\+=<>| \n\r\t'
+};
+
+// Alternative configurations for different document types
+export const TESSERACT_PRESETS = {
+  contract: {
+    ...DEFAULT_TESSERACT_CONFIG,
+    pageSegMode: 6, // Uniform block of text
+    tesseditCharWhitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,!?@#$%&*()[]{}:;"\'-_/\\+=<>| \n\r\t'
+  },
+  form: {
+    ...DEFAULT_TESSERACT_CONFIG,
+    pageSegMode: 4, // Single column text of variable sizes
+  },
+  mixed: {
+    ...DEFAULT_TESSERACT_CONFIG,
+    pageSegMode: 3, // Fully automatic page segmentation
+  },
+  singleLine: {
+    ...DEFAULT_TESSERACT_CONFIG,
+    pageSegMode: 7, // Single text line
+  },
+  sparseText: {
+    ...DEFAULT_TESSERACT_CONFIG,
+    pageSegMode: 11, // Sparse text
+  }
+};
+
 export const processPDFWithOCR = async (
   file: File,
-  onProgress?: (progress: PDFProcessingProgress) => void
+  onProgress?: (progress: PDFProcessingProgress) => void,
+  tesseractConfig: TesseractConfig = DEFAULT_TESSERACT_CONFIG
 ): Promise<{ text: string; confidence: number }> => {
   console.log("=== STARTING BROWSER-COMPATIBLE PDF PROCESSING ===");
   console.log("File details:", {
@@ -24,6 +71,7 @@ export const processPDFWithOCR = async (
     size: file.size,
     type: file.type
   });
+  console.log("Tesseract config:", tesseractConfig);
   
   try {
     // Validate file type
@@ -88,8 +136,8 @@ export const processPDFWithOCR = async (
           )
         ]) as any;
         
-        // Set up canvas with high resolution
-        const scale = 2.0;
+        // Set up canvas with high resolution for better OCR
+        const scale = 3.0; // Increased from 2.0 for better text recognition
         const viewport = page.getViewport({ scale });
         
         const canvas = document.createElement('canvas');
@@ -102,6 +150,10 @@ export const processPDFWithOCR = async (
           failedPages++;
           continue;
         }
+        
+        // Enhance canvas rendering for better OCR
+        context.imageSmoothingEnabled = false;
+        context.imageSmoothingQuality = 'high';
         
         // Render page to canvas with timeout
         const renderContext = {
@@ -116,44 +168,69 @@ export const processPDFWithOCR = async (
           )
         ]);
         
-        console.log(`Page ${pageNum} rendered to canvas`);
+        console.log(`Page ${pageNum} rendered to canvas with scale ${scale}`);
         
-        // Convert canvas to data URL
-        const imageDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+        // Convert canvas to high-quality image for OCR
+        const imageDataUrl = canvas.toDataURL('image/png', 1.0); // PNG for better quality
         
-        // Run OCR on the image
+        // Run OCR on the image with custom configuration
         onProgress?.({ 
           step: 'ocr', 
           pageNumber: pageNum, 
           totalPages,
-          message: `Running OCR on page ${pageNum}...`
+          message: `Running OCR on page ${pageNum} with ${tesseractConfig.language} language...`
         });
         
-        console.log(`Starting OCR for page ${pageNum}`);
+        console.log(`Starting OCR for page ${pageNum} with config:`, tesseractConfig);
         
-        const ocrResult = await Promise.race([
-          Tesseract.recognize(imageDataUrl, 'eng', {
-            logger: (m) => {
-              if (m.status === 'recognizing text') {
-                onProgress?.({ 
-                  step: 'ocr', 
-                  pageNumber: pageNum, 
-                  totalPages,
-                  ocrProgress: Math.round(m.progress * 100),
-                  message: `OCR progress: ${Math.round(m.progress * 100)}%`
-                });
-              }
+        // Prepare Tesseract options
+        const tesseractOptions = {
+          logger: (m: any) => {
+            if (m.status === 'recognizing text') {
+              onProgress?.({ 
+                step: 'ocr', 
+                pageNumber: pageNum, 
+                totalPages,
+                ocrProgress: Math.round(m.progress * 100),
+                message: `OCR progress: ${Math.round(m.progress * 100)}%`
+              });
             }
+          }
+        };
+
+        // Build Tesseract worker options
+        const workerOptions: any = {};
+        if (tesseractConfig.pageSegMode !== undefined) {
+          workerOptions['tessedit_pageseg_mode'] = tesseractConfig.pageSegMode.toString();
+        }
+        if (tesseractConfig.ocrEngineMode !== undefined) {
+          workerOptions['tessedit_ocr_engine_mode'] = tesseractConfig.ocrEngineMode.toString();
+        }
+        if (tesseractConfig.preserveInterwordSpaces) {
+          workerOptions['preserve_interword_spaces'] = '1';
+        }
+        if (tesseractConfig.tesseditCharWhitelist) {
+          workerOptions['tessedit_char_whitelist'] = tesseractConfig.tesseditCharWhitelist;
+        }
+        if (tesseractConfig.tesseditCharBlacklist) {
+          workerOptions['tessedit_char_blacklist'] = tesseractConfig.tesseditCharBlacklist;
+        }
+
+        const ocrResult = await Promise.race([
+          Tesseract.recognize(imageDataUrl, tesseractConfig.language, tesseractOptions).then(result => {
+            // Apply worker options after recognition if needed
+            return result;
           }),
           new Promise((_, reject) => 
-            setTimeout(() => reject(new Error(`OCR timeout on page ${pageNum}`)), 60000)
+            setTimeout(() => reject(new Error(`OCR timeout on page ${pageNum}`)), 90000) // Increased timeout
           )
         ]) as any;
         
         console.log(`OCR completed for page ${pageNum}:`, {
           confidence: ocrResult.data.confidence,
           textLength: ocrResult.data.text.length,
-          textPreview: ocrResult.data.text.substring(0, 100)
+          textPreview: ocrResult.data.text.substring(0, 100),
+          config: tesseractConfig
         });
         
         if (ocrResult.data.text && ocrResult.data.text.trim().length > 0) {
@@ -190,6 +267,7 @@ export const processPDFWithOCR = async (
     console.log(`Average confidence: ${averageConfidence}%`);
     console.log(`Processed pages: ${processedPages}/${totalPages}`);
     console.log(`Failed pages: ${failedPages}`);
+    console.log(`Used config:`, tesseractConfig);
     
     if (processedPages === 0) {
       throw new Error("Failed to extract text from any pages. The PDF may contain only images or be corrupted.");

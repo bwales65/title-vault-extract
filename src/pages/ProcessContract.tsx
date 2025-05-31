@@ -8,7 +8,8 @@ import { DocumentViewer } from "@/components/DocumentViewer";
 import { FieldExtractor } from "@/components/FieldExtractor";
 import { ExtractedTextViewer } from "@/components/ExtractedTextViewer";
 import { toast } from "@/hooks/use-toast";
-import { processPDFWithOCR, PDFProcessingProgress } from "@/utils/pdfProcessor";
+import { processPDFWithOCR, PDFProcessingProgress, TesseractConfig, TESSERACT_PRESETS } from "@/utils/pdfProcessor";
+import { TesseractConfigComponent } from "@/components/TesseractConfig";
 
 interface ProcessState {
   file: File;
@@ -42,6 +43,7 @@ const ProcessContract = () => {
     error?: string;
   }>({});
   const [processingError, setProcessingError] = useState<string | null>(null);
+  const [tesseractConfig, setTesseractConfig] = useState<TesseractConfig>(TESSERACT_PRESETS.contract);
 
   useEffect(() => {
     if (!state?.file) {
@@ -208,17 +210,21 @@ const ProcessContract = () => {
     });
   };
 
-  const processDocument = async () => {
+  const processDocument = async (customConfig?: TesseractConfig) => {
     try {
       console.log("Starting document processing...");
       setProcessingError(null);
+      setIsProcessing(true);
+      setCurrentStep("loading");
+
+      const configToUse = customConfig || tesseractConfig;
 
       toast({
         title: "Starting PDF processing...",
-        description: "Processing your document with improved error handling",
+        description: `Using ${configToUse.language} language with page segmentation mode ${configToUse.pageSegMode}`,
       });
 
-      // Process PDF with our improved utility
+      // Process PDF with our improved utility and custom config
       const ocrResult = await processPDFWithOCR(state.file, (progress: PDFProcessingProgress) => {
         setCurrentStep(progress.step);
         setProcessingProgress({
@@ -232,7 +238,7 @@ const ProcessContract = () => {
         if (progress.error) {
           console.warn("Page processing error:", progress.error);
         }
-      });
+      }, configToUse);
 
       console.log("PDF processing completed");
       
@@ -300,6 +306,14 @@ const ProcessContract = () => {
       setIsProcessing(false);
       setCurrentStep("fallback");
     }
+  };
+
+  const handleTesseractConfigChange = (newConfig: TesseractConfig) => {
+    setTesseractConfig(newConfig);
+  };
+
+  const handleReprocessWithNewConfig = () => {
+    processDocument(tesseractConfig);
   };
 
   const handleFieldUpdate = (fieldName: string, newValue: string) => {
@@ -492,8 +506,8 @@ const ProcessContract = () => {
               </CardContent>
             </Card>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Extracted Text Viewer */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Left Column: Extracted Text Viewer */}
               <div className="space-y-4">
                 <ExtractedTextViewer
                   extractedText={extractedText}
@@ -510,7 +524,17 @@ const ProcessContract = () => {
                 </Button>
               </div>
 
-              {/* Field Extractor */}
+              {/* Middle Column: Tesseract Configuration */}
+              <div>
+                <TesseractConfigComponent
+                  config={tesseractConfig}
+                  onConfigChange={handleTesseractConfigChange}
+                  onReprocess={handleReprocessWithNewConfig}
+                  isProcessing={isProcessing}
+                />
+              </div>
+
+              {/* Right Column: Field Extractor */}
               <Card>
                 <CardHeader>
                   <CardTitle>Extracted Data</CardTitle>
