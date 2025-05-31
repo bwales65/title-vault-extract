@@ -11,6 +11,7 @@ export interface PDFProcessingProgress {
   totalPages?: number;
   ocrProgress?: number;
   message?: string;
+  error?: string;
 }
 
 export const processPDFWithOCR = async (
@@ -25,6 +26,16 @@ export const processPDFWithOCR = async (
   });
   
   try {
+    // Validate file type
+    if (file.type !== "application/pdf") {
+      throw new Error(`Invalid file type: ${file.type}. Please upload a PDF file.`);
+    }
+
+    // Validate file size (limit to 50MB)
+    if (file.size > 50 * 1024 * 1024) {
+      throw new Error("File too large. Please upload a PDF smaller than 50MB.");
+    }
+
     // Load PDF
     onProgress?.({ step: 'loading', message: 'Loading PDF document...' });
     const arrayBuffer = await file.arrayBuffer();
@@ -32,14 +43,30 @@ export const processPDFWithOCR = async (
     console.log("PDF loaded into buffer, size:", arrayBuffer.byteLength);
     
     // Load PDF with pdfjs
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let pdf;
+    try {
+      pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    } catch (pdfError) {
+      console.error("PDF parsing error:", pdfError);
+      throw new Error("Failed to parse PDF. The file may be corrupted or password-protected.");
+    }
+
     const totalPages = pdf.numPages;
+    
+    if (totalPages === 0) {
+      throw new Error("PDF contains no pages.");
+    }
+
+    if (totalPages > 20) {
+      throw new Error("PDF has too many pages (limit: 20). Please upload a smaller document.");
+    }
     
     console.log(`PDF has ${totalPages} pages`);
     
     let allText = '';
     let totalConfidence = 0;
     let processedPages = 0;
+    let failedPages = 0;
     
     // Process each page
     for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
@@ -53,8 +80,13 @@ export const processPDFWithOCR = async (
           message: `Converting page ${pageNum} to image...`
         });
         
-        // Get page
-        const page = await pdf.getPage(pageNum);
+        // Get page with timeout
+        const page = await Promise.race([
+          pdf.getPage(pageNum),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`Timeout loading page ${pageNum}`)), 30000)
+          )
+        ]) as any;
         
         // Set up canvas with high resolution
         const scale = 2.0;
@@ -67,16 +99,22 @@ export const processPDFWithOCR = async (
         
         if (!context) {
           console.error(`Failed to get canvas context for page ${pageNum}`);
+          failedPages++;
           continue;
         }
         
-        // Render page to canvas
+        // Render page to canvas with timeout
         const renderContext = {
           canvasContext: context,
           viewport: viewport
         };
         
-        await page.render(renderContext).promise;
+        await Promise.race([
+          page.render(renderContext).promise,
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`Timeout rendering page ${pageNum}`)), 30000)
+          )
+        ]);
         
         console.log(`Page ${pageNum} rendered to canvas`);
         
@@ -93,19 +131,24 @@ export const processPDFWithOCR = async (
         
         console.log(`Starting OCR for page ${pageNum}`);
         
-        const ocrResult = await Tesseract.recognize(imageDataUrl, 'eng', {
-          logger: (m) => {
-            if (m.status === 'recognizing text') {
-              onProgress?.({ 
-                step: 'ocr', 
-                pageNumber: pageNum, 
-                totalPages,
-                ocrProgress: Math.round(m.progress * 100),
-                message: `OCR progress: ${Math.round(m.progress * 100)}%`
-              });
+        const ocrResult = await Promise.race([
+          Tesseract.recognize(imageDataUrl, 'eng', {
+            logger: (m) => {
+              if (m.status === 'recognizing text') {
+                onProgress?.({ 
+                  step: 'ocr', 
+                  pageNumber: pageNum, 
+                  totalPages,
+                  ocrProgress: Math.round(m.progress * 100),
+                  message: `OCR progress: ${Math.round(m.progress * 100)}%`
+                });
+              }
             }
-          }
-        });
+          }),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`OCR timeout on page ${pageNum}`)), 60000)
+          )
+        ]) as any;
         
         console.log(`OCR completed for page ${pageNum}:`, {
           confidence: ocrResult.data.confidence,
@@ -120,7 +163,7 @@ export const processPDFWithOCR = async (
         } else {
           console.warn(`No text extracted from page ${pageNum}`);
           allText += `\n--- Page ${pageNum} (No text found) ---\n`;
-          processedPages++;
+          failedPages++;
         }
         
         // Clean up canvas
@@ -128,8 +171,15 @@ export const processPDFWithOCR = async (
         
       } catch (pageError) {
         console.error(`Error processing page ${pageNum}:`, pageError);
-        allText += `\n--- Page ${pageNum} (Error) ---\n[Page processing failed: ${pageError.message}]\n`;
-        processedPages++;
+        allText += `\n--- Page ${pageNum} (Error: ${pageError.message}) ---\n`;
+        failedPages++;
+        
+        onProgress?.({ 
+          step: 'ocr', 
+          pageNumber: pageNum, 
+          totalPages,
+          error: `Failed to process page ${pageNum}: ${pageError.message}`
+        });
       }
     }
     
@@ -139,6 +189,15 @@ export const processPDFWithOCR = async (
     console.log(`Total text length: ${allText.length}`);
     console.log(`Average confidence: ${averageConfidence}%`);
     console.log(`Processed pages: ${processedPages}/${totalPages}`);
+    console.log(`Failed pages: ${failedPages}`);
+    
+    if (processedPages === 0) {
+      throw new Error("Failed to extract text from any pages. The PDF may contain only images or be corrupted.");
+    }
+
+    if (failedPages > totalPages / 2) {
+      console.warn("More than half the pages failed to process");
+    }
     
     return {
       text: allText,
@@ -150,12 +209,10 @@ export const processPDFWithOCR = async (
     
     onProgress?.({ 
       step: 'fallback', 
-      message: 'PDF processing failed - manual review required' 
+      message: 'PDF processing failed',
+      error: error.message 
     });
 
-    return {
-      text: `[PDF processing failed - manual review required for file: ${file.name}]\nError: ${error.message}`,
-      confidence: 0
-    };
+    throw error; // Re-throw so the UI can handle it properly
   }
 };

@@ -36,8 +36,9 @@ const ProcessContract = () => {
     totalPages?: number;
     ocrProgress?: number;
     message?: string;
+    error?: string;
   }>({});
-  const [hasError, setHasError] = useState(false);
+  const [processingError, setProcessingError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!state?.file) {
@@ -172,16 +173,11 @@ const ProcessContract = () => {
   const processDocument = async () => {
     try {
       console.log("Starting document processing...");
-      setHasError(false);
-
-      // Check if file is PDF
-      if (state.file.type !== "application/pdf") {
-        throw new Error(`Unsupported file type: ${state.file.type}. Please upload a PDF file.`);
-      }
+      setProcessingError(null);
 
       toast({
         title: "Starting PDF processing...",
-        description: "Using improved PDF.js worker configuration",
+        description: "Processing your document with improved error handling",
       });
 
       // Process PDF with our improved utility
@@ -191,20 +187,17 @@ const ProcessContract = () => {
           pageNumber: progress.pageNumber,
           totalPages: progress.totalPages,
           ocrProgress: progress.ocrProgress,
-          message: progress.message
+          message: progress.message,
+          error: progress.error
         });
+
+        // Show error toasts for page-level errors
+        if (progress.error) {
+          console.warn("Page processing error:", progress.error);
+        }
       });
 
       console.log("PDF processing completed");
-      
-      if (ocrResult.confidence === 0) {
-        setHasError(true);
-        toast({
-          title: "Processing completed with warnings",
-          description: "PDF processing encountered issues. Manual review recommended.",
-          variant: "destructive",
-        });
-      }
       
       setCurrentStep("extraction");
       toast({
@@ -243,20 +236,28 @@ const ProcessContract = () => {
       setCurrentStep("review");
       setIsProcessing(false);
 
+      const successMessage = ocrResult.confidence > 70 
+        ? `Successfully extracted ${extractedFields.length} fields with ${Math.round(ocrResult.confidence)}% confidence`
+        : `Extracted ${extractedFields.length} fields but with low confidence (${Math.round(ocrResult.confidence)}%). Please review carefully.`;
+
       toast({
         title: "Processing complete!",
-        description: `Extracted ${extractedFields.length} fields from ${processingProgress.totalPages || 1} page(s)`,
+        description: successMessage,
+        variant: ocrResult.confidence > 70 ? "default" : "destructive"
       });
+
     } catch (error) {
       console.error("Processing error:", error);
-      setHasError(true);
+      const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+      setProcessingError(errorMessage);
       
       toast({
         title: "Processing failed",
-        description: error instanceof Error ? error.message : "There was an error processing your document",
+        description: errorMessage,
         variant: "destructive",
       });
       setIsProcessing(false);
+      setCurrentStep("fallback");
     }
   };
 
@@ -317,6 +318,10 @@ const ProcessContract = () => {
   ).length;
 
   const getProgressMessage = () => {
+    if (processingProgress.error) {
+      return `Error: ${processingProgress.error}`;
+    }
+    
     if (processingProgress.message) {
       return processingProgress.message;
     }
@@ -331,7 +336,7 @@ const ProcessContract = () => {
       case "extraction":
         return "Extracting contract fields...";
       case "fallback":
-        return "Using fallback processing method...";
+        return "Processing failed - please check the error details below";
       default:
         return "Processing...";
     }
@@ -393,7 +398,7 @@ const ProcessContract = () => {
             )}
             
             {currentStep === "ocr" && processingProgress.ocrProgress && (
-              <div className="w-64 mx-auto bg-gray-200 rounded-full h-2">
+              <div className="w-64 mx-auto bg-gray-200 rounded-full h-2 mb-4">
                 <div 
                   className="bg-red-700 h-2 rounded-full transition-all duration-300" 
                   style={{ width: `${processingProgress.ocrProgress}%` }}
@@ -402,13 +407,34 @@ const ProcessContract = () => {
               </div>
             )}
 
-            {hasError && (
-              <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                <p className="text-yellow-800">
-                  Processing encountered issues. The system will continue with available data.
-                </p>
+            {processingProgress.error && (
+              <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg max-w-md mx-auto">
+                <p className="text-red-800 text-sm">{processingProgress.error}</p>
               </div>
             )}
+          </div>
+        ) : processingError ? (
+          <div className="text-center py-12">
+            <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">Processing Failed</h3>
+            <div className="max-w-md mx-auto bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+              <p className="text-red-800">{processingError}</p>
+            </div>
+            <div className="space-y-2 text-sm text-gray-600 max-w-md mx-auto">
+              <p><strong>Common solutions:</strong></p>
+              <ul className="text-left space-y-1">
+                <li>• Ensure the PDF is not password-protected</li>
+                <li>• Try a smaller file (under 50MB, max 20 pages)</li>
+                <li>• Make sure the PDF contains readable text</li>
+                <li>• Check that the file is not corrupted</li>
+              </ul>
+            </div>
+            <Button 
+              onClick={() => navigate("/")} 
+              className="mt-6 bg-red-700 hover:bg-red-800"
+            >
+              Try Another Document
+            </Button>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
