@@ -45,6 +45,7 @@ export const processPDFWithOCR = async (
     // Load PDF with comprehensive error handling
     onProgress?.({ step: 'loading', message: 'Loading PDF document...' });
     const arrayBuffer = await file.arrayBuffer();
+    console.log("PDF file read into array buffer, size:", arrayBuffer.byteLength);
     
     // Try to load the PDF with multiple fallback configurations
     let pdf;
@@ -105,9 +106,10 @@ export const processPDFWithOCR = async (
         });
         
         const page = await pdf.getPage(pageNum);
+        console.log(`Page ${pageNum} loaded, dimensions:`, page.getViewport({ scale: 1 }));
         
-        // Set up canvas for rendering with higher resolution for better OCR
-        const scale = 2.0;
+        // Set up canvas for rendering with much higher resolution for better OCR
+        const scale = 3.0; // Increased from 2.0 for better quality
         const viewport = page.getViewport({ scale });
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
@@ -119,30 +121,40 @@ export const processPDFWithOCR = async (
         canvas.height = viewport.height;
         canvas.width = viewport.width;
         
+        // Set high quality rendering
+        context.imageSmoothingEnabled = false;
+        
+        console.log(`Canvas created for page ${pageNum}: ${canvas.width}x${canvas.height}`);
+        
         // Render PDF page to canvas
         await page.render({
           canvasContext: context,
           viewport: viewport
         }).promise;
         
-        // Convert canvas to blob for Tesseract
+        console.log(`Page ${pageNum} rendered to canvas successfully`);
+        
+        // Convert canvas to blob for Tesseract with higher quality
         const blob = await new Promise<Blob>((resolve, reject) => {
           canvas.toBlob((blob) => {
             if (blob) {
+              console.log(`Canvas converted to blob for page ${pageNum}, size:`, blob.size);
               resolve(blob);
             } else {
               reject(new Error('Failed to convert canvas to blob'));
             }
-          }, 'image/png');
+          }, 'image/png', 1.0); // Maximum quality
         });
         
-        // Run OCR on the page image
+        // Run OCR on the page image with better settings
         onProgress?.({ 
           step: 'ocr', 
           pageNumber: pageNum, 
           totalPages,
           message: `Running OCR on page ${pageNum}...`
         });
+        
+        console.log(`Starting OCR for page ${pageNum}...`);
         
         const ocrResult = await Tesseract.recognize(blob, 'eng', {
           logger: (m) => {
@@ -155,10 +167,15 @@ export const processPDFWithOCR = async (
                 message: `OCR progress: ${Math.round(m.progress * 100)}%`
               });
             }
-          }
+          },
+          tessedit_pageseg_mode: Tesseract.PSM.AUTO,
+          tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/$():;-# ',
         });
         
-        console.log(`Page ${pageNum} OCR completed. Confidence: ${ocrResult.data.confidence}%`);
+        console.log(`Page ${pageNum} OCR completed.`);
+        console.log(`- Confidence: ${ocrResult.data.confidence}%`);
+        console.log(`- Text length: ${ocrResult.data.text.length}`);
+        console.log(`- Text preview:`, ocrResult.data.text.substring(0, 200));
         
         allText += `\n--- Page ${pageNum} ---\n${ocrResult.data.text}\n`;
         totalConfidence += ocrResult.data.confidence;
@@ -176,6 +193,7 @@ export const processPDFWithOCR = async (
     console.log("PDF processing completed successfully");
     console.log(`Total text length: ${allText.length}`);
     console.log(`Average confidence: ${averageConfidence}%`);
+    console.log(`Full extracted text:`, allText);
     
     return {
       text: allText,
