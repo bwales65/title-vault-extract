@@ -169,7 +169,6 @@ const Index = () => {
                   id="closer-initials"
                   value={closerInitials}
                   onChange={(e) => setCloserInitials(e.target.value.toUpperCase())}
-                  placeholder="BW"
                   maxLength={3}
                 />
               </div>
