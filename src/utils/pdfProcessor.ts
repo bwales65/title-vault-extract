@@ -1,9 +1,8 @@
-
 import * as pdfjsLib from 'pdfjs-dist';
 import Tesseract from 'tesseract.js';
 
-// Completely disable PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = false;
+// Set workerSrc to empty string to disable worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = '';
 
 export interface PDFProcessingProgress {
   step: 'loading' | 'converting' | 'ocr';
@@ -23,10 +22,9 @@ export const processPDFWithOCR = async (
     onProgress?.({ step: 'loading' });
     const arrayBuffer = await file.arrayBuffer();
     
-    // Configure PDF.js to completely avoid worker usage
+    // Configure PDF.js with valid options only
     const loadingTask = pdfjsLib.getDocument({
       data: arrayBuffer,
-      disableWorker: true,
       useWorkerFetch: false,
       isEvalSupported: false,
       useSystemFonts: true
